@@ -54,11 +54,29 @@ func main() {
 					os.Exit(0)
 				} else if event.Rune() == 'R' || event.Rune() == 'r' {
 					if cpu.State == cardiac.CPU_HALTED {
+						timing = 1000
 						cpu.Reset()
+						renderNotificationChannel <- true
+					} else if cpu.State == cardiac.CPU_PAUSED {
+						timing = 1000
+						cpu.Unpause()
+						renderNotificationChannel <- true
 					}
 				} else if event.Rune() == 'H' || event.Rune() == 'h' {
 					if cpu.State == cardiac.CPU_HALTED {
+						timing = 1000
 						cpu.HardReset()
+						renderNotificationChannel <- true
+					}
+				} else if event.Rune() == 'P' || event.Rune() == 'p' {
+					if cpu.State == cardiac.CPU_RUNNING {
+						cpu.Pause()
+						renderNotificationChannel <- true
+					}
+				} else if event.Rune() == 'S' || event.Rune() == 's' {
+					if cpu.State == cardiac.CPU_PAUSED || cpu.State == cardiac.CPU_HALTED {
+						cpu.State = cardiac.CPU_STEP
+						timing = 250
 					}
 				}
 			case *tcell.EventResize:
@@ -139,12 +157,16 @@ func drawUpdate(s tcell.Screen, cpu *cardiac.Cardiac) {
 	switch cpu.State {
 	case cardiac.CPU_RUNNING:
 		drawText(s, 1, 30, defStyle, "Running")
+		drawText(s, 15, 30, defStyle, "(P)ause")
 	case cardiac.CPU_HALTED:
 		drawText(s, 1, 30, defStyle, "Halted")
 		drawText(s, 15, 30, defStyle, "(R)eset")
 		drawText(s, 30, 30, defStyle, "(H)ard reset")
+		drawText(s, 45, 30, defStyle, "(S)tep")
 	case cardiac.CPU_PAUSED:
-		drawText(s, 1, 30, defStyle, "PAUSED")
+		drawText(s, 1, 30, defStyle, "Paused")
+		drawText(s, 15, 30, defStyle, "(R)esume")
+		drawText(s, 30, 30, defStyle, "(S)tep")
 	}
 
 	drawText(s, width-17, 30, defStyle, "ESC to terminate")
