@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
-	"math"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -13,6 +15,20 @@ import (
 
 var defStyle = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
 var execStyle = tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite)
+var statusStyle = tcell.StyleDefault.Background(tcell.ColorGreen).Foreground(tcell.ColorBlack)
+
+var statusMessage string = ""
+var statusMessageTime time.Time
+
+const statusMessageDuration int64 = 3000
+
+const (
+	NORMAL_PROCESSING = iota
+	DUMP_TO_FILE
+	READ_FROM_FILE
+)
+
+var SimulatorState int = NORMAL_PROCESSING
 
 func main() {
 	file, err := os.OpenFile("logs.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
@@ -52,6 +68,10 @@ func main() {
 				if event.Key() == tcell.KeyEscape || event.Key() == tcell.KeyCtrlC {
 					s.Fini()
 					os.Exit(0)
+				} else if event.Key() == tcell.KeyF6 {
+					dumpMemory(s, cpu)
+				} else if event.Key() == tcell.KeyF7 {
+					restoreMemory(s, cpu)
 				} else if event.Rune() == 'R' || event.Rune() == 'r' {
 					if cpu.State == cardiac.CPU_HALTED {
 						timing = 1000
@@ -78,6 +98,19 @@ func main() {
 						cpu.State = cardiac.CPU_STEP
 						timing = 250
 					}
+				} else if event.Rune() >= '0' && event.Rune() <= '9' && cpu.State == cardiac.CPU_INPUT {
+					cpu.Input += string(event.Rune())
+					if len(cpu.Input) > 4 {
+						cpu.Input = cpu.Input[len(cpu.Input)-4:]
+					}
+				} else if (event.Key() == tcell.KeyBackspace || event.Key() == tcell.KeyDelete) && cpu.State == cardiac.CPU_INPUT {
+					cpu.Input = " " + cpu.Input[0:3]
+					if cpu.Input == "    " {
+						cpu.Input = "   0"
+					}
+				} else if event.Key() == tcell.KeyEnter && cpu.State == cardiac.CPU_INPUT {
+					timing = 1000
+					cpu.EndInput()
 				}
 			case *tcell.EventResize:
 				s.Sync()
@@ -100,6 +133,9 @@ func main() {
 	for {
 		if time.Since(lastExec).Milliseconds() >= timing {
 			cpu.ExecuteCurrent()
+			if cpu.State == cardiac.CPU_INPUT {
+				timing = 10
+			}
 			lastExec = time.Now()
 			renderNotificationChannel <- true
 		}
@@ -108,25 +144,93 @@ func main() {
 
 }
 
+func dumpMemory(s tcell.Screen, cpu *cardiac.Cardiac) {
+	statusMessage = "Dumping to file"
+	statusMessageTime = time.Now()
+
+	path, err := os.Getwd()
+	if err != nil {
+		log.Println(err)
+	}
+
+	f, err := os.Create(path + "/memdump.godiac")
+	if err != nil {
+		statusMessage = "Error dumping file: " + err.Error()
+	}
+
+	for i := 1; i < 100; i++ {
+		f.WriteString(fmt.Sprintf("%02d:%03d\n", i, cpu.Memory[i]))
+	}
+
+	defer f.Close()
+}
+
+func restoreMemory(s tcell.Screen, cpu *cardiac.Cardiac) {
+	statusMessage = "Reading from file"
+	statusMessageTime = time.Now()
+
+	path, err := os.Getwd()
+	if err != nil {
+		log.Println(err)
+	}
+
+	file, err := os.Open(path + "/memdump.godiac")
+	if err != nil {
+		statusMessage = "Error reading file: " + err.Error()
+	}
+
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		s := strings.Split(scanner.Text(), ":")
+		m, err := strconv.Atoi(s[0])
+		if err != nil {
+			statusMessage = "Error parsing memory location '" + s[0] + "': " + err.Error()
+			break
+		}
+		v, err := strconv.Atoi(s[1])
+		if err != nil {
+			statusMessage = "Error parsing memory value '" + s[1] + "': " + err.Error()
+			break
+		}
+
+		cpu.Memory[m] = int16(v)
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Fatal(err)
+	}
+}
+
 func drawUpdate(s tcell.Screen, cpu *cardiac.Cardiac) {
 	width, _ := s.Size()
 	drawText(s, (width/2)-8, 0, defStyle, "---  CARDIAC  ---")
-	drawText(s, 5, 2, defStyle, "Accumulator")
+
+	drawText(s, 10, 2, defStyle, "F6: Dump memory to file")
+	drawText(s, 40, 2, defStyle, "F7: Restore memory from file")
+
+	drawText(s, 5, 4, defStyle, "Accumulator")
 	if cpu.Accumulator >= 0 {
-		drawText(s, 7, 3, defStyle, fmt.Sprintf("[ %04d]", cpu.Accumulator))
+		drawText(s, 7, 5, defStyle, fmt.Sprintf("[ %04d]", cpu.Accumulator))
 	} else {
-		drawText(s, 7, 3, defStyle, fmt.Sprintf("[-%04d]", cpu.Accumulator*-1))
+		drawText(s, 7, 5, defStyle, fmt.Sprintf("[-%04d]", cpu.Accumulator*-1))
 	}
 
-	drawText(s, 9, 5, defStyle, "IP")
-	drawText(s, 8, 6, defStyle, fmt.Sprintf("[%03d]", cpu.Ip))
+	drawText(s, 9, 7, defStyle, "IP")
+	drawText(s, 8, 8, defStyle, fmt.Sprintf("[%03d]", cpu.Ip))
 
-	drawText(s, 7, 8, defStyle, "Output")
-	if math.Abs(cpu.Output) < 10000 {
-		drawText(s, 7, 9, defStyle, fmt.Sprintf("[%03d]", int(cpu.Output)))
+	drawText(s, 7, 11, defStyle, "Output")
+	if cpu.Output < 0 {
+		drawText(s, 7, 12, defStyle, fmt.Sprintf("[-%03d]", int(cpu.Output)*-1))
+	} else if cpu.Output < 10000 {
+		drawText(s, 7, 12, defStyle, fmt.Sprintf("[ %03d]", int(cpu.Output)))
 	} else {
-		drawText(s, 7, 9, defStyle, "[    ]")
+		drawText(s, 7, 12, defStyle, "[    ]")
 	}
+
+	drawText(s, 7, 14, defStyle, "Input")
+	drawText(s, 7, 15, defStyle, fmt.Sprintf("[%s]", cpu.Input))
 
 	for mem := 0; mem < 100; mem++ {
 		r := mem - 75
@@ -148,28 +252,39 @@ func drawUpdate(s tcell.Screen, cpu *cardiac.Cardiac) {
 		}
 
 		if cpu.Memory[mem] < 0 {
-			drawText(s, 20+(c*13), r+2, style, fmt.Sprintf("%03d [-%03d]", mem, cpu.Memory[mem]*-1))
+			drawText(s, 20+(c*13), r+4, style, fmt.Sprintf("%03d [-%03d]", mem, cpu.Memory[mem]*-1))
 		} else {
-			drawText(s, 20+(c*13), r+2, style, fmt.Sprintf("%03d [ %03d]", mem, cpu.Memory[mem]))
+			drawText(s, 20+(c*13), r+4, style, fmt.Sprintf("%03d [ %03d]", mem, cpu.Memory[mem]))
 		}
+
 	}
 
 	switch cpu.State {
 	case cardiac.CPU_RUNNING:
-		drawText(s, 1, 30, defStyle, "Running")
+		drawText(s, 1, 30, statusStyle, "Running")
 		drawText(s, 15, 30, defStyle, "(P)ause")
 	case cardiac.CPU_HALTED:
-		drawText(s, 1, 30, defStyle, "Halted")
+		drawText(s, 1, 30, statusStyle, "Halted")
 		drawText(s, 15, 30, defStyle, "(R)eset")
 		drawText(s, 30, 30, defStyle, "(H)ard reset")
 		drawText(s, 45, 30, defStyle, "(S)tep")
 	case cardiac.CPU_PAUSED:
-		drawText(s, 1, 30, defStyle, "Paused")
+		drawText(s, 1, 30, statusStyle, "Paused")
 		drawText(s, 15, 30, defStyle, "(R)esume")
 		drawText(s, 30, 30, defStyle, "(S)tep")
+	case cardiac.CPU_INPUT:
+		drawText(s, 1, 30, statusStyle, "Input")
+		drawText(s, 15, 30, defStyle, "ENTER to end")
 	}
 
 	drawText(s, width-17, 30, defStyle, "ESC to terminate")
+
+	if statusMessage != "" {
+		drawText(s, (width/2)-(len(statusMessage)/2), 32, statusStyle, statusMessage)
+		if time.Since(statusMessageTime).Milliseconds() > statusMessageDuration {
+			statusMessage = ""
+		}
+	}
 }
 
 func drawText(s tcell.Screen, x int, y int, style tcell.Style, text string) {

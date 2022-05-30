@@ -3,6 +3,8 @@ package cardiac
 import (
 	"log"
 	"math"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -10,6 +12,7 @@ const (
 	CPU_HALTED
 	CPU_PAUSED
 	CPU_STEP
+	CPU_INPUT
 )
 
 type Cardiac struct {
@@ -18,6 +21,10 @@ type Cardiac struct {
 	Memory      [100]int16
 	State       int
 	Output      float64
+	Input       string
+
+	inputDestination int16
+	lastState        int
 }
 
 func NewCardiac() *Cardiac {
@@ -34,27 +41,30 @@ func NewCardiac() *Cardiac {
 func (c *Cardiac) Reset() {
 	c.Ip = 0
 	c.State = CPU_RUNNING
+	c.lastState = CPU_RUNNING
 }
 
 func (c *Cardiac) HardReset() {
+	c.Reset()
 	c.Accumulator = 0
-	c.Ip = 0
-	c.State = CPU_RUNNING
 	c.Output = 10000
+	c.Input = "    "
 
 	for i := 0; i < 100; i++ {
 		c.Memory[i] = 0
 	}
 
-	c.Memory[0] = 197
-	c.Memory[1] = 298
-	c.Memory[2] = 420
-	c.Memory[3] = 695
-	c.Memory[4] = 595
-	c.Memory[5] = 900
-	c.Memory[97] = -40
-	c.Memory[98] = 24
-	c.Memory[99] = 12
+	/*	c.Memory[0] = 197
+		c.Memory[1] = 298
+		c.Memory[2] = 420
+		c.Memory[3] = 695
+		c.Memory[4] = 595
+		c.Memory[5] = 900
+		c.Memory[97] = -40
+		c.Memory[98] = 24
+		c.Memory[99] = 12 */
+
+	c.Memory[0] = 1
 }
 
 func (c *Cardiac) Pause() {
@@ -67,6 +77,20 @@ func (c *Cardiac) Unpause() {
 	if c.State == CPU_PAUSED {
 		c.State = CPU_RUNNING
 	}
+}
+
+func (c *Cardiac) EndInput() {
+	num, err := strconv.Atoi(strings.Trim(c.Input, " "))
+	log.Printf("num = %d, err = %s", num, err)
+	if err != nil {
+		log.Println(err)
+		num = 0
+	}
+	if c.inputDestination > 0 {
+		c.Memory[c.inputDestination] = int16(num)
+	}
+	c.State = c.lastState
+	c.Ip++
 }
 
 func (c *Cardiac) ExecuteCurrent() {
@@ -84,7 +108,11 @@ func (c *Cardiac) ExecuteCurrent() {
 		log.Printf("addr = %d", addr)
 
 		switch instr {
-		case 0:
+		case 0: // INP
+			c.lastState = c.State
+			c.State = CPU_INPUT
+			c.Input = "   0"
+			c.inputDestination = addr
 		case 1: // CLA
 			c.Accumulator = c.Memory[addr]
 			c.Ip++
